@@ -1,0 +1,212 @@
+// Roots — genealogy data model (GEDCOM-aligned)
+// learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Auth (NextAuth credentials — JWT sessions, so Account/Session optional)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  trees       Tree[]
+  memberships TreeMember[]
+}
+
+// ---------------------------------------------------------------------------
+// Tree workspace
+// ---------------------------------------------------------------------------
+
+model Tree {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  ownerId     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner    User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  people   Person[]
+  families Family[]
+  media    MediaObject[]
+  sources  Source[]
+  notes    NoteRecord[]
+  members  TreeMember[]
+
+  @@index([ownerId])
+}
+
+// Collaboration stub — roles for a later phase.
+enum TreeRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+model TreeMember {
+  id     String   @id @default(cuid())
+  treeId String
+  userId String
+  role   TreeRole @default(VIEWER)
+
+  tree Tree @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([treeId, userId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Genealogy core
+// ---------------------------------------------------------------------------
+
+enum Gender {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+// GEDCOM INDI
+model Person {
+  id          String   @id @default(cuid())
+  treeId      String
+  gedcomId    String? // preserve original xref (e.g. "I123") on import
+  firstName   String
+  lastName    String
+  middleNames String?
+  nickname    String?
+  gender      Gender   @default(UNKNOWN)
+  birthDate   String? // free-form to tolerate GEDCOM partial/approx dates
+  birthPlace  String?
+  deathDate   String?
+  deathPlace  String?
+  occupation  String?
+  biography   String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tree Tree @relation(fields: [treeId], references: [id], onDelete: Cascade)
+
+  // Families this person is a partner in
+  familiesAsPartner1 Family[] @relation("Partner1")
+  familiesAsPartner2 Family[] @relation("Partner2")
+
+  // Families this person is a child in
+  childLinks ChildInFamily[]
+
+  media MediaObject[]
+
+  @@index([treeId])
+  @@index([treeId, lastName, firstName])
+  @@index([treeId, gedcomId])
+}
+
+enum RelationshipType {
+  MARRIED
+  PARTNER
+  UNKNOWN
+}
+
+// GEDCOM FAM — a couple/union plus its children
+model Family {
+  id               String           @id @default(cuid())
+  treeId           String
+  gedcomId         String?
+  partner1Id       String?
+  partner2Id       String?
+  relationshipType RelationshipType @default(UNKNOWN)
+  marriageDate     String?
+  marriagePlace    String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  tree     Tree            @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  partner1 Person?         @relation("Partner1", fields: [partner1Id], references: [id], onDelete: SetNull)
+  partner2 Person?         @relation("Partner2", fields: [partner2Id], references: [id], onDelete: SetNull)
+  children ChildInFamily[]
+
+  @@index([treeId])
+  @@index([treeId, gedcomId])
+  @@index([partner1Id])
+  @@index([partner2Id])
+}
+
+enum Pedigree {
+  BIOLOGICAL
+  ADOPTED
+  FOSTER
+  STEP
+  UNKNOWN
+}
+
+// Links a child Person to a Family. Siblings derive from sharing a Family;
+// a child's parents derive from that Family's partners.
+model ChildInFamily {
+  id       String   @id @default(cuid())
+  familyId String
+  childId  String
+  pedigree Pedigree @default(BIOLOGICAL)
+
+  family Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  child  Person @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([familyId, childId])
+  @@index([childId])
+}
+
+// ---------------------------------------------------------------------------
+// Supporting records (media URL-based for now; sources/notes retained on import)
+// ---------------------------------------------------------------------------
+
+model MediaObject {
+  id        String   @id @default(cuid())
+  treeId    String
+  personId  String?
+  type      String   @default("photo") // photo | document | certificate | story
+  url       String
+  caption   String?
+  createdAt DateTime @default(now())
+
+  tree   Tree    @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  person Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  @@index([treeId])
+  @@index([personId])
+}
+
+model Source {
+  id       String  @id @default(cuid())
+  treeId   String
+  gedcomId String?
+  title    String?
+  text     String?
+
+  tree Tree @relation(fields: [treeId], references: [id], onDelete: Cascade)
+
+  @@index([treeId])
+}
+
+model NoteRecord {
+  id       String  @id @default(cuid())
+  treeId   String
+  gedcomId String?
+  text     String?
+
+  tree Tree @relation(fields: [treeId], references: [id], onDelete: Cascade)
+
+  @@index([treeId])
+}

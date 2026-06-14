@@ -1,0 +1,75 @@
+0 HEAD
+1 SOUR webtrees
+2 NAME webtrees
+2 VERS 2.1
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME William /Windsor/
+1 SEX M
+1 BIRT
+2 DATE 1 JUN 1948
+2 PLAC London, England
+1 OCCU Architect
+1 FAMS @F1@
+1 NOTE Founder of the family line.
+0 @I2@ INDI
+1 NAME Eleanor /Hart/
+1 SEX F
+1 BIRT
+2 DATE 12 MAR 1950
+2 PLAC Bristol, England
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME James Robert /Windsor/
+1 SEX M
+1 BIRT
+2 DATE 5 SEP 1972
+2 PLAC London, England
+1 OCCU Teacher
+1 FAMS @F2@
+1 FAMC @F1@
+0 @I4@ INDI
+1 NAME Sophie /Windsor/
+1 SEX F
+1 BIRT
+2 DATE 18 JUL 1975
+1 FAMC @F1@
+0 @I5@ INDI
+1 NAME Clara /Bennett/
+1 SEX F
+1 BIRT
+2 DATE 22 NOV 1974
+1 FAMS @F2@
+0 @I6@ INDI
+1 NAME Oliver /Windsor/
+1 SEX M
+1 BIRT
+2 DATE 3 FEB 2001
+1 FAMC @F2@
+0 @I7@ INDI
+1 NAME Emma /Windsor/
+1 SEX F
+1 BIRT
+2 DATE 9 AUG 2003
+1 FAMC @F2@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 CHIL @I3@
+1 CHIL @I4@
+1 MARR
+2 DATE 14 SEP 1971
+2 PLAC London, England
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I5@
+1 CHIL @I6@
+1 CHIL @I7@
+1 MARR
+2 DATE 2 JUN 2000
+0 @S1@ SOUR
+1 TITL Parish Records of London
+0 @N1@ NOTE A shared family note.
+0 TRLR
