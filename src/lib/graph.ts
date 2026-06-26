@@ -249,7 +249,13 @@ function computeGenerations(graph: TreeGraph): Map<string, number> {
  * disjoint horizontal interval, so two families can never overlap. A couple is
  * centered over its children's span.
  */
-export function layoutTree(graph: TreeGraph): LayoutResult {
+export function layoutTree(
+  graph: TreeGraph,
+  opts: { duplicateSpouses?: boolean } = {},
+): LayoutResult {
+  // 2D draws cross-lineage spouses as duplicates; 3D links them directly, so it
+  // passes duplicateSpouses:false to keep one node per person.
+  const duplicateSpouses = opts.duplicateSpouses !== false;
   const { childrenOfFamily, parentsOf } = buildParentIndex(graph);
   const gen = computeGenerations(graph);
   const personById = new Map(graph.people.map((p) => [p.id, p]));
@@ -329,8 +335,12 @@ export function layoutTree(graph: TreeGraph): LayoutResult {
       if (!other) continue;
       if (!hasParents(other))
         return { layoutId: other, personId: other, dup: false };
-      return { layoutId: `dup:${f.id}:${other}`, personId: other, dup: true };
+      if (duplicateSpouses)
+        return { layoutId: `dup:${f.id}:${other}`, personId: other, dup: true };
+      // No-duplicate mode: the cross-lineage spouse stays in their own lineage
+      // and is joined by a real link, so don't place them adjacent here.
     }
+    if (!duplicateSpouses) return undefined;
     // Otherwise this person is the non-anchor partner: still show the couple in
     // THIS person's own family by drawing the spouse as a duplicate beside them,
     // plus their direct children as leaf duplicates (echoFamilyId). Children's
@@ -533,13 +543,18 @@ export function layoutTree(graph: TreeGraph): LayoutResult {
     });
   }
 
-  // Partner edges connect the anchor to the spouse node actually placed beside
-  // it (the duplicate when the spouse has their own lineage) — always adjacent.
-  const partnerEdges: PartnerEdge[] = adjacencies.map((a) => ({
-    id: `pe:${a.anchorId}:${a.spouseLayoutId}`,
-    aId: a.anchorId,
-    bId: a.spouseLayoutId,
-  }));
+  // Partner edges. With duplicates (2D) they connect each anchor to the spouse
+  // copy beside it (always adjacent). Without duplicates (3D) they connect the
+  // two real people directly — a real link even across distant lineages.
+  const partnerEdges: PartnerEdge[] = duplicateSpouses
+    ? adjacencies.map((a) => ({
+        id: `pe:${a.anchorId}:${a.spouseLayoutId}`,
+        aId: a.anchorId,
+        bId: a.spouseLayoutId,
+      }))
+    : graph.families
+        .filter((f) => f.partner1Id && f.partner2Id)
+        .map((f) => ({ id: f.id, aId: f.partner1Id!, bId: f.partner2Id! }));
 
   const parentEdges: ParentEdge[] = [];
   for (const fam of graph.families) {

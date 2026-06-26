@@ -1,4 +1,8 @@
-import { layoutTree, type TreeGraph } from "@/lib/graph";
+import { layoutTree, serializeLayout, type TreeGraph } from "@/lib/graph";
+
+// 3D mirrors the 2D tree (generations as layers, families packed side by side)
+// but every person appears exactly once. Cross-lineage marriages — the ones 2D
+// renders as duplicates — are drawn here as real links arcing through depth.
 
 export interface Node3D {
   id: string;
@@ -12,78 +16,59 @@ export interface Node3D {
   deathDate: string | null;
 }
 
-export interface Layout3DData {
-  nodes: Node3D[];
-  partnerEdges: { aId: string; bId: string }[];
-  parentEdges: { childId: string; parentIds: string[] }[];
+export interface Edge3D {
+  id: string;
+  aId: string;
+  bId: string;
 }
 
-// Spatial scale: Y = generations (layers), X = sibling spread, Z = branch sep.
-const SX = 6;
-const SY = 7;
-const SZ = 9;
+export interface Layout3DData {
+  nodes: Node3D[];
+  parentEdges: Edge3D[]; // anchor parent -> child
+  partnerEdges: Edge3D[]; // adjacent couples (short)
+  crossEdges: Edge3D[]; // cross-lineage marriages (long, arced)
+}
 
-/**
- * 3D layout: generations form horizontal layers on Y (top = oldest), siblings
- * spread on X (reusing the shared layered layout), and distinct family branches
- * are separated along Z so the tree reads as a navigable volume.
- */
+const SX = 7; // sibling spacing
+const SY = 9; // generation spacing
+// A couple placed adjacently sits ~1 layout unit apart; anything well beyond
+// that joins two different lineages and is drawn as an arced cross link.
+const CROSS_THRESHOLD = 2.5 * SX;
+
 export function buildLayout3D(graph: TreeGraph): Layout3DData {
-  const res = layoutTree(graph);
+  const flat = serializeLayout(layoutTree(graph, { duplicateSpouses: false }));
 
-  // parentsOf, to find each node's originating branch (top ancestor).
-  const familyById = new Map(graph.families.map((f) => [f.id, f]));
-  const parentsOf = new Map<string, string[]>();
-  for (const link of graph.childLinks) {
-    const fam = familyById.get(link.familyId);
-    if (!fam) continue;
-    const ps = [fam.partner1Id, fam.partner2Id].filter(
-      (p): p is string => !!p,
-    );
-    parentsOf.set(link.childId, [...(parentsOf.get(link.childId) ?? []), ...ps]);
+  const nodes: Node3D[] = flat.nodes.map((n) => ({
+    id: n.id,
+    x: n.x * SX,
+    y: -n.gen * SY,
+    z: 0,
+    firstName: n.firstName,
+    lastName: n.lastName,
+    gender: n.gender,
+    birthDate: n.birthDate,
+    deathDate: n.deathDate,
+  }));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+
+  // Parent connector: from the parent the child is laid out under, to the child.
+  const parentEdges: Edge3D[] = [];
+  for (const e of flat.parentEdges) {
+    const parent = e.anchorId ?? e.parentIds[0];
+    if (parent && byId.has(parent) && byId.has(e.childId)) {
+      parentEdges.push({ id: e.id, aId: parent, bId: e.childId });
+    }
   }
 
-  const branchMemo = new Map<string, string>();
-  const branchRoot = (id: string, guard = new Set<string>()): string => {
-    const cached = branchMemo.get(id);
-    if (cached) return cached;
-    if (guard.has(id)) return id;
-    guard.add(id);
-    const parents = parentsOf.get(id) ?? [];
-    const root = parents.length ? branchRoot(parents[0], guard) : id;
-    branchMemo.set(id, root);
-    return root;
-  };
+  const partnerEdges: Edge3D[] = [];
+  const crossEdges: Edge3D[] = [];
+  for (const e of flat.partnerEdges) {
+    const a = byId.get(e.aId);
+    const b = byId.get(e.bId);
+    if (!a || !b) continue;
+    const far = Math.hypot(a.x - b.x, a.y - b.y) > CROSS_THRESHOLD;
+    (far ? crossEdges : partnerEdges).push({ id: e.id, aId: e.aId, bId: e.bId });
+  }
 
-  // Order branches by their root's X so the Z spread stays visually coherent.
-  const rootIds = [...new Set([...res.nodes.keys()].map((id) => branchRoot(id)))];
-  rootIds.sort(
-    (a, b) => (res.nodes.get(a)?.x ?? 0) - (res.nodes.get(b)?.x ?? 0),
-  );
-  const branchIndex = new Map(rootIds.map((id, i) => [id, i]));
-  const mid = (rootIds.length - 1) / 2;
-
-  const nodes: Node3D[] = [...res.nodes.values()].map((n) => {
-    const bIdx = branchIndex.get(branchRoot(n.id)) ?? 0;
-    return {
-      id: n.id,
-      x: n.x * SX,
-      y: -n.gen * SY,
-      z: (bIdx - mid) * SZ,
-      firstName: n.person.firstName,
-      lastName: n.person.lastName,
-      gender: n.person.gender,
-      birthDate: n.person.birthDate ?? null,
-      deathDate: n.person.deathDate ?? null,
-    };
-  });
-
-  return {
-    nodes,
-    partnerEdges: res.partnerEdges.map((e) => ({ aId: e.aId, bId: e.bId })),
-    parentEdges: res.parentEdges.map((e) => ({
-      childId: e.childId,
-      parentIds: e.parentIds,
-    })),
-  };
+  return { nodes, parentEdges, partnerEdges, crossEdges };
 }

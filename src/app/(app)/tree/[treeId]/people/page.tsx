@@ -38,8 +38,8 @@ export default async function PeoplePage({
     : null;
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[320px_1fr]">
-      <aside className="flex flex-col border-r">
+    <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[320px_1fr] md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
+      <aside className="flex min-h-0 flex-col border-r md:overflow-hidden">
         <div className="flex items-center justify-between gap-2 border-b p-3">
           <span className="text-sm font-semibold">People</span>
           <PersonFormDialog treeId={treeId} mode="create" triggerSize="sm">
@@ -52,7 +52,7 @@ export default async function PeoplePage({
         </div>
       </aside>
 
-      <section className="min-h-0">
+      <section className="min-h-0 md:overflow-hidden">
         {selected && relations ? (
           <PersonProfile treeId={treeId} person={selected} relations={relations} />
         ) : (

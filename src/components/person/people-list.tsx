@@ -37,7 +37,7 @@ export function PeopleList({
           onChange={(e) => setQ(e.target.value)}
         />
       </div>
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <ul className="p-2">
           {filtered.map((p) => {
             const span = lifespan(p);

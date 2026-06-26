@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { OrbitControls, Billboard, Text } from "@react-three/drei";
+import { Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { Button } from "@/components/ui/button";
@@ -15,30 +15,59 @@ const GENDER_COLOR: Record<string, string> = {
   FEMALE: "#ec4899",
   UNKNOWN: "#94a3b8",
 };
-const NODE_RADIUS = 1.4;
-const MAX_LABELS = 60;
+const NODE_R = 1.3;
+const MAX_LABELS = 45;
+const Z_GAP = 16; // depth between fanned-out child subtrees
+
+type Vec3 = [number, number, number];
+type PosMap = Map<string, Vec3>;
 
 const dummy = new THREE.Object3D();
 const tmpColor = new THREE.Color();
 
+// ---- axis-aligned (right-angle) connectors, like the 2D tree ----
+function pushPath(arr: number[], pts: Vec3[]) {
+  for (let i = 0; i < pts.length - 1; i++) arr.push(...pts[i], ...pts[i + 1]);
+}
+// Parent → child: drop down to a bus row, across in X, across in Z, down to child.
+function pushParentElbow(arr: number[], a: Vec3, b: Vec3) {
+  const busY = (a[1] + b[1]) / 2;
+  pushPath(arr, [
+    a,
+    [a[0], busY, a[2]],
+    [b[0], busY, a[2]],
+    [b[0], busY, b[2]],
+    [b[0], b[1], b[2]],
+  ]);
+}
+// Same-row link (couple / cross-family): across X, across Z, then Y if needed.
+function pushFlatElbow(arr: number[], a: Vec3, b: Vec3) {
+  pushPath(arr, [a, [b[0], a[1], a[2]], [b[0], a[1], b[2]], [b[0], b[1], b[2]]]);
+}
+function geomFrom(arr: number[]) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+  return g;
+}
+
 function Nodes({
   nodes,
-  selectedId,
+  posById,
   onSelect,
   onFocus,
 }: {
   nodes: Node3D[];
-  selectedId?: string;
+  posById: PosMap;
   onSelect: (id: string) => void;
   onFocus: (id: string) => void;
 }) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-
+  const ref = useRef<THREE.InstancedMesh>(null);
   useEffect(() => {
-    const mesh = meshRef.current;
+    const mesh = ref.current;
     if (!mesh) return;
     nodes.forEach((n, i) => {
-      dummy.position.set(n.x, n.y, n.z);
+      const p = posById.get(n.id) ?? [n.x, n.y, 0];
+      dummy.position.set(p[0], p[1], p[2]);
       dummy.scale.setScalar(1);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
@@ -46,11 +75,11 @@ function Nodes({
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [nodes]);
+  }, [nodes, posById]);
 
   return (
     <instancedMesh
-      ref={meshRef}
+      ref={ref}
       args={[undefined, undefined, nodes.length]}
       onClick={(e: ThreeEvent<MouseEvent>) => {
         e.stopPropagation();
@@ -61,104 +90,96 @@ function Nodes({
         if (e.instanceId != null) onFocus(nodes[e.instanceId].id);
       }}
     >
-      <sphereGeometry args={[NODE_RADIUS, 20, 20]} />
-      <meshStandardMaterial roughness={0.45} metalness={0.1} />
+      <boxGeometry args={[NODE_R * 1.8, NODE_R * 1.8, NODE_R * 1.8]} />
+      <meshStandardMaterial roughness={0.5} metalness={0.05} />
     </instancedMesh>
   );
 }
 
-function SelectionRing({ node }: { node?: Node3D }) {
-  if (!node) return null;
+function SelectionRing({ pos }: { pos?: Vec3 }) {
+  if (!pos) return null;
   return (
-    <mesh position={[node.x, node.y, node.z]}>
-      <sphereGeometry args={[NODE_RADIUS * 1.35, 24, 24]} />
+    <mesh position={pos}>
+      <boxGeometry args={[NODE_R * 2.4, NODE_R * 2.4, NODE_R * 2.4]} />
       <meshBasicMaterial color="#f59e0b" wireframe transparent opacity={0.9} />
     </mesh>
   );
 }
 
-function Edges({ data, nodeById }: { data: Layout3DData; nodeById: Map<string, Node3D> }) {
-  const parentGeo = useMemo(() => {
-    const pts: number[] = [];
+function Edges({ data, posById }: { data: Layout3DData; posById: PosMap }) {
+  const geoms = useMemo(() => {
+    const parent: number[] = [];
+    const partner: number[] = [];
+    const cross: number[] = [];
     for (const e of data.parentEdges) {
-      const child = nodeById.get(e.childId);
-      const parents = e.parentIds
-        .map((id) => nodeById.get(id))
-        .filter((n): n is Node3D => !!n);
-      if (!child || !parents.length) continue;
-      const ax = parents.reduce((s, p) => s + p.x, 0) / parents.length;
-      const ay = parents.reduce((s, p) => s + p.y, 0) / parents.length;
-      const az = parents.reduce((s, p) => s + p.z, 0) / parents.length;
-      pts.push(ax, ay, az, child.x, child.y, child.z);
+      const a = posById.get(e.aId);
+      const b = posById.get(e.bId);
+      if (a && b) pushParentElbow(parent, a, b);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-    return g;
-  }, [data.parentEdges, nodeById]);
-
-  const partnerGeo = useMemo(() => {
-    const pts: number[] = [];
     for (const e of data.partnerEdges) {
-      const a = nodeById.get(e.aId);
-      const b = nodeById.get(e.bId);
-      if (!a || !b) continue;
-      pts.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      const a = posById.get(e.aId);
+      const b = posById.get(e.bId);
+      if (a && b) pushFlatElbow(partner, a, b);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-    return g;
-  }, [data.partnerEdges, nodeById]);
-
+    for (const e of data.crossEdges) {
+      const a = posById.get(e.aId);
+      const b = posById.get(e.bId);
+      if (a && b) pushFlatElbow(cross, a, b);
+    }
+    return { parent: geomFrom(parent), partner: geomFrom(partner), cross: geomFrom(cross) };
+  }, [data, posById]);
   return (
     <>
-      <lineSegments geometry={parentGeo}>
-        <lineBasicMaterial color="#64748b" transparent opacity={0.5} />
+      <lineSegments geometry={geoms.parent}>
+        <lineBasicMaterial color="#475569" transparent opacity={0.55} />
       </lineSegments>
-      <lineSegments geometry={partnerGeo}>
-        <lineBasicMaterial color="#fb7185" transparent opacity={0.85} />
+      <lineSegments geometry={geoms.partner}>
+        <lineBasicMaterial color="#fb7185" transparent opacity={0.9} />
+      </lineSegments>
+      <lineSegments geometry={geoms.cross}>
+        <lineBasicMaterial color="#a855f7" transparent opacity={0.8} />
       </lineSegments>
     </>
   );
 }
 
-/** Distance-based LOD: only label the nearest MAX_LABELS nodes to the camera. */
-function Labels({ nodes }: { nodes: Node3D[] }) {
+function Labels({ nodes, posById }: { nodes: Node3D[]; posById: PosMap }) {
   const { camera } = useThree();
   const [visible, setVisible] = useState<Node3D[]>([]);
   const frame = useRef(0);
-
   useFrame(() => {
-    frame.current = (frame.current + 1) % 8;
+    frame.current = (frame.current + 1) % 12;
     if (frame.current !== 0) return;
-    const camPos = camera.position;
-    const scored = nodes
-      .map((n) => ({
-        n,
-        d: (n.x - camPos.x) ** 2 + (n.y - camPos.y) ** 2 + (n.z - camPos.z) ** 2,
-      }))
+    const c = camera.position;
+    const near = nodes
+      .map((n) => {
+        const p = posById.get(n.id) ?? [n.x, n.y, 0];
+        return { n, d: (p[0] - c.x) ** 2 + (p[1] - c.y) ** 2 + (p[2] - c.z) ** 2 };
+      })
       .sort((a, b) => a.d - b.d)
       .slice(0, MAX_LABELS)
-      // hide labels that are very far away
-      .filter((s) => s.d < 90 * 90)
+      .filter((s) => s.d < 110 * 110)
       .map((s) => s.n);
-    setVisible(scored);
+    setVisible(near);
   });
-
   return (
     <>
       {visible.map((n) => {
+        const p = posById.get(n.id) ?? [n.x, n.y, 0];
         const span = lifespan(n);
         return (
-          <Billboard key={n.id} position={[n.x, n.y + NODE_RADIUS + 1.2, n.z]}>
-            <Text fontSize={1.1} color="#0f172a" anchorX="center" anchorY="bottom" outlineWidth={0.04} outlineColor="#ffffff">
+          <Html
+            key={n.id}
+            position={[p[0], p[1] + NODE_R + 1.4, p[2]]}
+            center
+            zIndexRange={[10, 0]}
+            style={{ pointerEvents: "none" }}
+          >
+            <div className="whitespace-nowrap rounded bg-slate-900/85 px-1.5 py-0.5 text-center text-[11px] leading-tight text-slate-100 shadow">
               {n.firstName} {n.lastName}
-            </Text>
-            {span ? (
-              <Text position={[0, -1.2, 0]} fontSize={0.75} color="#475569" anchorX="center" anchorY="bottom">
-                {span}
-              </Text>
-            ) : null}
-          </Billboard>
+              {span ? <span className="block text-[10px] text-slate-400">{span}</span> : null}
+            </div>
+          </Html>
         );
       })}
     </>
@@ -166,37 +187,48 @@ function Labels({ nodes }: { nodes: Node3D[] }) {
 }
 
 function CameraRig({
-  focusNode,
+  focusPos,
   controlsRef,
 }: {
-  focusNode?: Node3D;
+  focusPos?: Vec3;
   controlsRef: React.RefObject<OrbitControlsImpl | null>;
 }) {
   const target = useRef(new THREE.Vector3());
   const active = useRef(false);
-
   useEffect(() => {
-    if (focusNode) {
-      target.current.set(focusNode.x, focusNode.y, focusNode.z);
+    if (focusPos) {
+      target.current.set(focusPos[0], focusPos[1], focusPos[2]);
       active.current = true;
     }
-  }, [focusNode]);
-
+  }, [focusPos]);
   useFrame((state) => {
     if (!active.current || !controlsRef.current) return;
     const controls = controlsRef.current;
-    controls.target.lerp(target.current, 0.1);
+    controls.target.lerp(target.current, 0.12);
     const desired = new THREE.Vector3(
       target.current.x,
-      target.current.y + 6,
-      target.current.z + 22,
+      target.current.y + 4,
+      target.current.z + 26,
     );
-    state.camera.position.lerp(desired, 0.1);
+    state.camera.position.lerp(desired, 0.12);
     controls.update();
-    if (state.camera.position.distanceTo(desired) < 0.4) active.current = false;
+    if (state.camera.position.distanceTo(desired) < 0.5) active.current = false;
   });
-
   return null;
+}
+
+// Initial camera + orbit target, computed from the data before the Canvas
+// mounts so nothing has to fight OrbitControls afterwards. Frames the tree's
+// full height (trees are far wider than tall — pan to explore horizontally).
+function initialView(nodes: Node3D[]) {
+  if (nodes.length === 0) return { pos: [0, 0, 80] as Vec3, target: [0, 0, 0] as Vec3 };
+  const xs = nodes.map((n) => n.x);
+  const ys = nodes.map((n) => n.y);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const yRange = Math.max(...ys) - Math.min(...ys);
+  const dist = Math.max(80, yRange * 1.6);
+  return { pos: [cx, cy, dist] as Vec3, target: [cx, cy, 0] as Vec3 };
 }
 
 export function Roots3D({
@@ -212,11 +244,54 @@ export function Roots3D({
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const [selectedId, setSelectedId] = useState<string | undefined>(focusId);
   const [focusNodeId, setFocusNodeId] = useState<string | undefined>(focusId);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const nodeById = useMemo(
-    () => new Map(data.nodes.map((n) => [n.id, n])),
-    [data.nodes],
-  );
+  // Parent → ordered children, from the layout's parent edges.
+  const { childrenByAnchor, parentAnchorOf } = useMemo(() => {
+    const baseX = new Map(data.nodes.map((n) => [n.id, n.x]));
+    const childrenByAnchor = new Map<string, string[]>();
+    const parentAnchorOf = new Map<string, string>();
+    for (const e of data.parentEdges) {
+      childrenByAnchor.set(e.aId, [...(childrenByAnchor.get(e.aId) ?? []), e.bId]);
+      parentAnchorOf.set(e.bId, e.aId);
+    }
+    for (const kids of childrenByAnchor.values())
+      kids.sort((x, y) => (baseX.get(x) ?? 0) - (baseX.get(y) ?? 0));
+    return { childrenByAnchor, parentAnchorOf };
+  }, [data]);
+
+  // Z per node: 0 by default (planar). When an ancestor family is "expanded",
+  // each of its children's subtrees is pushed to its own depth layer.
+  const zById = useMemo(() => {
+    const z = new Map<string, number>();
+    const order = [...data.nodes].sort((a, b) => b.y - a.y); // parents first
+    for (const n of order) {
+      const anchor = parentAnchorOf.get(n.id);
+      if (anchor === undefined) {
+        z.set(n.id, 0);
+        continue;
+      }
+      const base = z.get(anchor) ?? 0;
+      if (expanded.has(anchor)) {
+        const kids = childrenByAnchor.get(anchor) ?? [];
+        const idx = kids.indexOf(n.id);
+        const mid = (kids.length - 1) / 2;
+        z.set(n.id, base + (idx - mid) * Z_GAP);
+      } else {
+        z.set(n.id, base);
+      }
+    }
+    return z;
+  }, [data, expanded, parentAnchorOf, childrenByAnchor]);
+
+  const posById = useMemo<PosMap>(() => {
+    const m = new Map<string, Vec3>();
+    for (const n of data.nodes) m.set(n.id, [n.x, n.y, zById.get(n.id) ?? 0]);
+    return m;
+  }, [data.nodes, zById]);
+
+  const nodeById = useMemo(() => new Map(data.nodes.map((n) => [n.id, n])), [data.nodes]);
+  const view = useMemo(() => initialView(data.nodes), [data.nodes]);
 
   useEffect(() => {
     if (focusId) {
@@ -226,64 +301,78 @@ export function Roots3D({
   }, [focusId]);
 
   const selectedNode = selectedId ? nodeById.get(selectedId) : undefined;
-  const focusNode = focusNodeId ? nodeById.get(focusNodeId) : undefined;
+  const selectedPos = selectedId ? posById.get(selectedId) : undefined;
+  const focusPos = focusNodeId ? posById.get(focusNodeId) : undefined;
+  const selectedHasChildren = selectedId ? childrenByAnchor.has(selectedId) : false;
+  const selectedExpanded = selectedId ? expanded.has(selectedId) : false;
+
+  function toggleExpand(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   return (
     <div className="relative h-full w-full bg-slate-900">
-      <Canvas camera={{ position: [0, 10, 60], fov: 55 }} dpr={[1, 2]}>
+      <Canvas camera={{ position: view.pos, fov: 55 }} dpr={[1, 1.75]}>
         <color attach="background" args={["#0f172a"]} />
-        <ambientLight intensity={0.8} />
-        <directionalLight position={[20, 30, 20]} intensity={1.1} />
-        <directionalLight position={[-20, -10, -20]} intensity={0.4} />
+        <ambientLight intensity={0.9} />
+        <directionalLight position={[30, 40, 50]} intensity={1} />
 
+        <Edges data={data} posById={posById} />
         <Nodes
           nodes={data.nodes}
-          selectedId={selectedId}
+          posById={posById}
           onSelect={setSelectedId}
           onFocus={(id) => {
             setSelectedId(id);
             setFocusNodeId(id);
           }}
         />
-        <SelectionRing node={selectedNode} />
-        <Edges data={data} nodeById={nodeById} />
-        <Labels nodes={data.nodes} />
+        <SelectionRing pos={selectedPos} />
+        <Labels nodes={data.nodes} posById={posById} />
 
         <OrbitControls
           ref={controlsRef}
           makeDefault
+          target={view.target}
           enableDamping
           dampingFactor={0.1}
-          maxDistance={400}
+          maxDistance={600}
           minDistance={6}
+          screenSpacePanning
+          mouseButtons={{
+            LEFT: THREE.MOUSE.PAN,
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: THREE.MOUSE.ROTATE,
+          }}
         />
-        <CameraRig focusNode={focusNode} controlsRef={controlsRef} />
+        <CameraRig focusPos={focusPos} controlsRef={controlsRef} />
       </Canvas>
 
-      {/* Selected person panel */}
       {selectedNode ? (
-        <div className="absolute left-3 top-3 w-60 rounded-lg border bg-background/95 p-3 shadow-lg backdrop-blur">
+        <div className="absolute left-3 top-3 w-64 rounded-lg border bg-background/95 p-3 shadow-lg backdrop-blur">
           <div className="font-semibold">
             {selectedNode.firstName} {selectedNode.lastName}
           </div>
           {lifespan(selectedNode) ? (
-            <div className="text-sm text-muted-foreground">
-              {lifespan(selectedNode)}
-            </div>
+            <div className="text-sm text-muted-foreground">{lifespan(selectedNode)}</div>
           ) : null}
-          <div className="mt-2 flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setFocusNodeId(selectedNode.id)}
-            >
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => setFocusNodeId(selectedNode.id)}>
               Focus
             </Button>
+            {selectedHasChildren ? (
+              <Button size="sm" variant="outline" onClick={() => toggleExpand(selectedNode.id)}>
+                {selectedExpanded ? "Collapse depth" : "Expand in depth"}
+              </Button>
+            ) : null}
             <Button
               size="sm"
-              onClick={() =>
-                router.push(`/tree/${treeId}/people?person=${selectedNode.id}`)
-              }
+              onClick={() => router.push(`/tree/${treeId}/people?person=${selectedNode.id}`)}
             >
               Open profile
             </Button>
@@ -292,7 +381,8 @@ export function Roots3D({
       ) : null}
 
       <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-background/80 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
-        Drag to orbit · scroll to zoom · click a node to select · double-click to focus
+        Drag to pan · right-drag to rotate · scroll to zoom · click a node, then “Expand in
+        depth” to fan its branches · <span className="text-purple-400">purple</span> = cross-family
       </div>
     </div>
   );
