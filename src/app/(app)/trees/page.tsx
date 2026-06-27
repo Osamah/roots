@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { CreateTreeDialog } from "./create-tree-dialog";
+import { EditTreeDialog } from "./edit-tree-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -41,21 +42,29 @@ export default async function TreesPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {trees.map((tree) => (
-            <Link key={tree.id} href={`/tree/${tree.id}`}>
-              <Card className="h-full transition-colors hover:border-primary">
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between gap-2">
-                    <span className="truncate">{tree.name}</span>
-                    <Badge variant="secondary">{tree._count.people}</Badge>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="line-clamp-2 text-sm text-muted-foreground">
-                    {tree.description || "No description"}
-                  </p>
-                </CardContent>
-              </Card>
-            </Link>
+            <div key={tree.id} className="relative">
+              <Link href={`/tree/${tree.id}`}>
+                <Card className="h-full transition-colors hover:border-primary">
+                  <CardHeader>
+                    <CardTitle className="flex items-center justify-between gap-2">
+                      <span className="truncate">{tree.name}</span>
+                      <Badge variant="secondary">{tree._count.people}</Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="line-clamp-2 pr-8 text-sm text-muted-foreground">
+                      {tree.description || "No description"}
+                    </p>
+                  </CardContent>
+                </Card>
+              </Link>
+              {tree.ownerId === user.id ? (
+                <EditTreeDialog
+                  tree={tree}
+                  className="absolute bottom-2 right-2 text-muted-foreground"
+                />
+              ) : null}
+            </div>
           ))}
         </div>
       )}

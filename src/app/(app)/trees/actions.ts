@@ -31,6 +31,36 @@ export async function createTreeAction(
   redirect(`/tree/${tree.id}`);
 }
 
+export type UpdateTreeResult = { ok: true } | { ok: false; error: string };
+
+export async function updateTreeAction(
+  treeId: string,
+  formData: FormData,
+): Promise<UpdateTreeResult> {
+  const user = await requireUser();
+  const parsed = treeSchema.safeParse({
+    name: formData.get("name"),
+    description: formData.get("description"),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const { count } = await prisma.tree.updateMany({
+    where: { id: treeId, ownerId: user.id },
+    data: {
+      name: parsed.data.name,
+      description: parsed.data.description || null,
+    },
+  });
+  if (count === 0) {
+    return { ok: false, error: "Tree not found" };
+  }
+
+  revalidatePath("/trees");
+  return { ok: true };
+}
+
 export async function deleteTreeAction(treeId: string) {
   const user = await requireUser();
   await prisma.tree.deleteMany({ where: { id: treeId, ownerId: user.id } });
