@@ -10,6 +10,7 @@ const TABS = [
   { key: "3d", label: "3D" },
   { key: "timeline", label: "Timeline" },
   { key: "import", label: "Import" },
+  { key: "export", label: "Export" },
   { key: "stats", label: "Stats" },
 ];
 
