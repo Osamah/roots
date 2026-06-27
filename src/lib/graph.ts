@@ -318,29 +318,38 @@ export function layoutTree(
       );
     });
 
-  // The non-anchor partner rendered adjacent to the anchor. If that spouse has
+  // The non-anchor partner(s) rendered adjacent to the anchor. If a spouse has
   // their own lineage in the tree, a DUPLICATE node is drawn beside the anchor
   // (so the couple + their children show together) while the real person still
   // appears in their own birth family — i.e. shown twice if you trace back far.
-  const adjacentSpouseRef = (
-    person: string,
-  ):
-    | { layoutId: string; personId: string; dup: boolean; echoFamilyId?: string }
-    | undefined => {
+  type SpouseRef = {
+    layoutId: string;
+    personId: string;
+    dup: boolean;
+    echoFamilyId?: string;
+  };
+  const adjacentSpouseRefs = (person: string): SpouseRef[] => {
     const fams = familiesAsPartner.get(person) ?? [];
-    // Prefer a family this person anchors — shows their couple AND children.
-    for (const f of fams) {
-      if (familyAnchor(f) !== person) continue;
-      const other = f.partner1Id === person ? f.partner2Id : f.partner1Id;
-      if (!other) continue;
-      if (!hasParents(other))
-        return { layoutId: other, personId: other, dup: false };
-      if (duplicateSpouses)
-        return { layoutId: `dup:${f.id}:${other}`, personId: other, dup: true };
-      // No-duplicate mode: the cross-lineage spouse stays in their own lineage
-      // and is joined by a real link, so don't place them adjacent here.
+    // Families this person anchors — shows the couple(s) AND children. A person
+    // with more than one marriage anchors several, so every such spouse is
+    // placed adjacent rather than only the first (which would leave the others
+    // floating, disconnected).
+    const anchored = fams.filter((f) => familyAnchor(f) === person);
+    if (anchored.length) {
+      const out: SpouseRef[] = [];
+      for (const f of anchored) {
+        const other = f.partner1Id === person ? f.partner2Id : f.partner1Id;
+        if (!other) continue;
+        if (!hasParents(other))
+          out.push({ layoutId: other, personId: other, dup: false });
+        else if (duplicateSpouses)
+          out.push({ layoutId: `dup:${f.id}:${other}`, personId: other, dup: true });
+        // No-duplicate mode: the cross-lineage spouse stays in their own lineage
+        // and is joined by a real link, so don't place them adjacent here.
+      }
+      return out;
     }
-    if (!duplicateSpouses) return undefined;
+    if (!duplicateSpouses) return [];
     // Otherwise this person is the non-anchor partner: still show the couple in
     // THIS person's own family by drawing the spouse as a duplicate beside them,
     // plus their direct children as leaf duplicates (echoFamilyId). Children's
@@ -348,14 +357,16 @@ export function layoutTree(
     for (const f of fams) {
       const other = f.partner1Id === person ? f.partner2Id : f.partner1Id;
       if (other)
-        return {
-          layoutId: `dup:${f.id}:${other}`,
-          personId: other,
-          dup: true,
-          echoFamilyId: f.id,
-        };
+        return [
+          {
+            layoutId: `dup:${f.id}:${other}`,
+            personId: other,
+            dup: true,
+            echoFamilyId: f.id,
+          },
+        ];
     }
-    return undefined;
+    return [];
   };
   // Married-in spouses (no birth family of their own) appear only beside their
   // partner, so they aren't also processed as roots.
@@ -375,7 +386,6 @@ export function layoutTree(
     return orderPeople(kids);
   };
 
-  const COUPLE_W = 2;
   const LEAF_W = 1;
   const SIBLING_GAP = 0.28;
   const ROOT_GAP = 0.7;
@@ -385,16 +395,16 @@ export function layoutTree(
   const widthGuard = new Set<string>();
   // Echo children = a non-anchor copy's direct children, shown as leaf dups.
   const echoChildren = (person: string): string[] => {
-    const sp = adjacentSpouseRef(person);
-    if (!sp?.echoFamilyId) return [];
-    return orderPeople(childrenOfFamily.get(sp.echoFamilyId) ?? []);
+    const echo = adjacentSpouseRefs(person).find((s) => s.echoFamilyId);
+    if (!echo?.echoFamilyId) return [];
+    return orderPeople(childrenOfFamily.get(echo.echoFamilyId) ?? []);
   };
   const widthOf = (anchor: string): number => {
     const cached = widthMemo.get(anchor);
     if (cached !== undefined) return cached;
-    if (widthGuard.has(anchor)) return COUPLE_W;
+    const coupleW = LEAF_W + adjacentSpouseRefs(anchor).length;
+    if (widthGuard.has(anchor)) return coupleW; // cycle guard: couple's own width
     widthGuard.add(anchor);
-    const coupleW = adjacentSpouseRef(anchor) ? COUPLE_W : LEAF_W;
     const kids = blockChildren(anchor).filter((k) => !widthGuard.has(k));
     let childrenW = 0;
     if (kids.length) {
@@ -425,17 +435,20 @@ export function layoutTree(
   const placeBlock = (anchor: string, left: number): number => {
     if (placed.has(anchor)) return x.get(anchor) ?? left;
     placed.add(anchor);
-    const sp = adjacentSpouseRef(anchor);
-    let members = [anchor];
-    if (sp) {
-      members = [anchor, sp.layoutId];
-      if (sp.dup)
-        dupNodes.set(sp.layoutId, {
-          personId: sp.personId,
+    const spouses = adjacentSpouseRefs(anchor);
+    // Center the anchor among its spouses so each partner edge stays short and
+    // doesn't cross a sibling spouse (e.g. spouseA — anchor — spouseB).
+    const spouseIds = spouses.map((s) => s.layoutId);
+    const mid = Math.floor(spouseIds.length / 2);
+    const members = [...spouseIds.slice(0, mid), anchor, ...spouseIds.slice(mid)];
+    for (const s of spouses) {
+      if (s.dup)
+        dupNodes.set(s.layoutId, {
+          personId: s.personId,
           gen: gen.get(anchor) ?? 0,
         });
-      else placed.add(sp.layoutId); // real married-in spouse is homed here
-      adjacencies.push({ anchorId: anchor, spouseLayoutId: sp.layoutId });
+      else placed.add(s.layoutId); // real married-in spouse is homed here
+      adjacencies.push({ anchorId: anchor, spouseLayoutId: s.layoutId });
     }
     const w = widthOf(anchor);
     const kids = blockChildren(anchor).filter((k) => !placed.has(k));
